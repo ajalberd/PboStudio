@@ -51,11 +51,48 @@ pub fn engine_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// Prime95: an `engines` folder first (what the person put there on purpose), then a `prime95.exe` on `PATH`.
 pub fn find_prime95() -> Option<PathBuf> {
     engine_roots()
         .into_iter()
         .map(|r| r.join("prime95").join("prime95.exe"))
         .find(|p| p.is_file())
+        .or_else(|| prime95_on_path(std::env::var_os("PATH").as_deref()))
+}
+
+/// Anything smaller than this is a launcher, not Prime95 (the real program is about 29 MB).
+const MIN_REAL_PRIME95_BYTES: u64 = 1_000_000;
+
+/// The first real `prime95.exe` named by a `PATH` value.
+///
+/// Package managers put a small launcher on `PATH` instead of the program. A Chocolatey shim starts the real Prime95
+/// and returns at once, so running it would look like Prime95 quitting, and the job object that confines the engine to
+/// one core would hold the launcher, not the program. So a launcher is followed to the program it stands for when
+/// that is known (Chocolatey: `<root>\bin\prime95.exe` stands for `<root>\lib\prime95\tools\prime95.exe`), and skipped
+/// when it is not. Nothing is run to find out.
+pub fn prime95_on_path(path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let size = |p: &Path| fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| m.len());
+    for dir in std::env::split_paths(path?) {
+        let candidate = dir.join("prime95.exe");
+        let Some(len) = size(&candidate) else {
+            continue;
+        };
+        if len >= MIN_REAL_PRIME95_BYTES {
+            return Some(candidate);
+        }
+        // A Chocolatey shim: the program is in the package folder next to `bin`.
+        if let Some(root) = dir.parent() {
+            let real = root
+                .join("lib")
+                .join("prime95")
+                .join("tools")
+                .join("prime95.exe");
+            if size(&real).is_some_and(|l| l >= MIN_REAL_PRIME95_BYTES) {
+                return Some(real);
+            }
+        }
+    }
+    None
 }
 
 /// The y-cruncher binary for a Zen generation (1 to 5): the first file whose name starts with the preferred prefix.
@@ -557,5 +594,71 @@ mod real_engine {
             "first report after {after:?}: {}",
             text.lines().last().unwrap_or("")
         );
+    }
+}
+
+#[cfg(test)]
+mod prime95_on_path {
+    use super::*;
+    use std::ffi::OsString;
+
+    /// A folder of its own under the temp folder, removed at the end.
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new(name: &str) -> Scratch {
+            let dir = std::env::temp_dir().join(format!("pbo-p95path-{}-{name}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        }
+        fn file(&self, rel: &str, bytes: usize) -> PathBuf {
+            let path = self.0.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, vec![0u8; bytes]).unwrap();
+            path
+        }
+        fn dir(&self, rel: &str) -> PathBuf {
+            self.0.join(rel)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn path_of(dirs: &[PathBuf]) -> OsString {
+        std::env::join_paths(dirs).unwrap()
+    }
+
+    #[test]
+    fn a_real_prime95_on_path_is_found() {
+        let s = Scratch::new("real");
+        let exe = s.file("tools/p95/prime95.exe", 2_000_000);
+        let path = path_of(&[s.dir("elsewhere"), s.dir("tools/p95")]);
+        assert_eq!(prime95_on_path(Some(&path)), Some(exe));
+    }
+
+    #[test]
+    fn a_chocolatey_shim_is_followed_to_the_program_it_stands_for() {
+        let s = Scratch::new("shim");
+        s.file("choco/bin/prime95.exe", 22_528);
+        let real = s.file("choco/lib/prime95/tools/prime95.exe", 2_000_000);
+        let path = path_of(&[s.dir("choco/bin")]);
+        assert_eq!(prime95_on_path(Some(&path)), Some(real));
+    }
+
+    #[test]
+    fn a_launcher_whose_program_is_unknown_is_not_taken_for_prime95() {
+        let s = Scratch::new("unknown-shim");
+        s.file("bin/prime95.exe", 22_528);
+        let path = path_of(&[s.dir("bin")]);
+        assert_eq!(prime95_on_path(Some(&path)), None);
+    }
+
+    #[test]
+    fn an_empty_or_missing_path_finds_nothing() {
+        assert_eq!(prime95_on_path(None), None);
+        assert_eq!(prime95_on_path(Some(OsString::new().as_os_str())), None);
     }
 }

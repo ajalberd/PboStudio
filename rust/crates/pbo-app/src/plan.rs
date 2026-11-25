@@ -186,6 +186,14 @@ impl Plan {
     ) -> Option<Plan> {
         let profile = pbo_core::profiles::by_id(step.profile.name())?;
         let mut plan = Plan::from_profile(&profile, base);
+        // The test list names its own engines (Prime95 for the search), which would make the engine the person chose
+        // for Auto count for nothing. Choosing y-cruncher means y-cruncher alone, in every phase: the list's other
+        // legs are dropped and what y-cruncher runs is the person's own set (`yc_set`), not the list's FFT range.
+        if base.engine == Engine::YCruncher {
+            plan.engine = Engine::YCruncher;
+            plan.then.clear();
+            plan.yc_set = base.yc_set;
+        }
         plan.seconds_per_test = intensity.minutes(step.stage.phase_number().max(1)) * 60;
         plan.rounds = 1;
         if !step.cores.is_empty() {
@@ -743,5 +751,40 @@ mod tests {
         assert_eq!(plan.cores, vec![0, 1, 4]);
         assert_eq!(plan.search, Search::Off);
         assert_eq!(plan.seconds_per_test, Intensity::Fast.minutes(1) * 60);
+    }
+
+    #[test]
+    fn choosing_ycruncher_for_auto_means_ycruncher_alone_in_every_phase() {
+        use pbo_core::auto::Intensity;
+        use pbo_core::campaign::{Action, NextStep, Profile, Stage};
+        let mut base = Plan::recommended();
+        base.engine = Engine::YCruncher;
+        let step = |profile, stage, tuner| NextStep {
+            profile,
+            stage,
+            use_auto_tuner: tuner,
+            cores: Vec::new(),
+            action: Action::ConfigureRun,
+            show_profile: false,
+        };
+        for (profile, stage, tuner) in [
+            (Profile::RecommendedCombo, Stage::Discover, false),
+            (Profile::HeavyFfts, Stage::Narrow, true),
+            (Profile::Overnight, Stage::Confirm, false),
+        ] {
+            let plan =
+                Plan::campaign_step(&step(profile, stage, tuner), &base, Intensity::Normal)
+                    .unwrap();
+            assert_eq!(plan.engine, Engine::YCruncher, "{stage:?}");
+            assert!(plan.then.is_empty(), "{stage:?}: no second engine");
+        }
+        // And the default is untouched: the search phase is still Prime95.
+        let plan = Plan::campaign_step(
+            &step(Profile::HeavyFfts, Stage::Narrow, true),
+            &Plan::recommended(),
+            Intensity::Normal,
+        )
+        .unwrap();
+        assert_eq!(plan.engine, Engine::Prime95);
     }
 }

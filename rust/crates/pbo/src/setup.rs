@@ -314,15 +314,17 @@ pub fn run(args: &[String]) -> i32 {
         }
         Some("status") => {
             for e in &ENGINES {
-                println!(
-                    "{:10} {}",
-                    e.name,
-                    if installed(e, &root) {
-                        "installed"
-                    } else {
-                        "not installed"
-                    }
-                );
+                if installed(e, &root) {
+                    println!("{:10} installed", e.name);
+                } else if let Some(found) = match e.name {
+                    "prime95" => crate::stress::find_prime95(),
+                    // The generation only picks which binary of the install is preferred; any install shows here.
+                    _ => crate::stress::find_ycruncher(5),
+                } {
+                    println!("{:10} found: {}", e.name, found.display());
+                } else {
+                    println!("{:10} not installed", e.name);
+                }
             }
             println!("folder: {}", root.display());
             match pbo_smu::driver_status() {

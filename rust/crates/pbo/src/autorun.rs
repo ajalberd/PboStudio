@@ -128,7 +128,7 @@ fn drive(o: &Options, intensity: Intensity, named_step: bool) -> i32 {
             return 130;
         }
         // What the campaign looks at: what each core holds, what is on record, and whether anything is missing.
-        let (cores, held, knowledge, chip_limit) = {
+        let (cores, held, knowledge, chip_limit, engine_ready) = {
             let machine = match commands::open_machine() {
                 Ok(m) => m,
                 Err(c) => return c,
@@ -150,11 +150,14 @@ fn drive(o: &Options, intensity: Intensity, named_step: bool) -> i32 {
             let (knowledge, _) = store.load_knowledge();
             let chip_limit =
                 pbo_core::depth::effective(machine.family.start_depth, None, &held_now, None);
+            // The program Auto will run: the one the person chose, found the way the run itself finds it.
+            let engine_ready = crate::session::default_setup(&machine, o.engine).is_ok();
             (
                 selected.into_iter().map(|c| c as u32).collect::<Vec<u32>>(),
                 held,
                 knowledge,
                 chip_limit,
+                engine_ready,
             )
         };
         let step = campaign::recommend(
@@ -163,7 +166,7 @@ fn drive(o: &Options, intensity: Intensity, named_step: bool) -> i32 {
             &knowledge,
             chip_limit,
             true,
-            crate::stress::find_prime95().is_some(),
+            engine_ready,
             o.guardband,
         );
         let decision = campaign::decide(&state, &step, &held, last_clean);

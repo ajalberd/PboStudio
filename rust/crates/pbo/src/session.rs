@@ -416,7 +416,7 @@ pub fn default_setup(machine: &Machine, kind: EngineKind) -> Result<Setup, Strin
     }
     .ok_or_else(|| {
         format!(
-            "{} was not found. Put it in an `engines` folder next to the program (engines\\prime95\\prime95.exe, engines\\ycruncher\\...), or set PBO_ENGINES.",
+            "{} was not found. Put it in an `engines` folder next to the program (engines\\prime95\\prime95.exe, engines\\ycruncher\\...), or set PBO_ENGINES. Prime95 is also found when prime95.exe is on PATH.",
             kind.name()
         )
     })?;
